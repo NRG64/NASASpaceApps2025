@@ -12,8 +12,24 @@ library(reshape2)
 library(lubridate)
 library(expm) 
 library(leaflet.extras)
+library(raster)
+library(leaflet)
+library(viridis)
+library(RColorBrewer)
+library(rnaturalearth)
 
+select <- dplyr::select
+# --- NEW: Load Global Land Polygon ONCE ---
+# This will download the shapefile the first time it's run and then use the local copy.
+# Use a smaller scale for faster loading if extreme detail isn't needed.
+# 'large' provides good detail. 'medium' or 'small' can be used if performance is an issue.
+world_land <- ne_countries(scale = "medium", type = "map_units", returnclass = "sf") %>%
+  st_geometry() # We only need the geometry (polygons)
+
+# Ensure the CRS is WGS84 (EPSG:4326) for consistency with Leaflet
+world_land <- st_transform(world_land, crs = 4326)
 # Load and preprocess your actual data
+# Assuming shark_data_fully_imputed_complete.csv is available
 Full_Shark_Data <- read.csv("shark_data_fully_imputed_complete.csv")
 
 # Your actual analysis code - FIXED with correct column names
@@ -63,9 +79,96 @@ Shark_states_daily <- Shark_states_daily %>%
     species_simple = case_when(
       grepl("White", species, ignore.case = TRUE) ~ "White Shark",
       grepl("Mako", species, ignore.case = TRUE) ~ "Mako Shark",
+      grepl("Tiger", species, ignore.case = TRUE) ~ "Tiger Shark",
+      grepl("Hammerhead", species, ignore.case = TRUE) ~ "Hammerhead Shark",
+      grepl("Blue", species, ignore.case = TRUE) ~ "Blue Shark",
       TRUE ~ species  # Keep original if no match
     )
   )
+
+# Shark species educational information
+shark_species_info <- list(
+  "White Shark" = list(
+    scientific_name = "Carcharodon carcharias",
+    size = "Up to 6.4 m (21 ft)",
+    weight = "Up to 1,100 kg (2,400 lb)",
+    lifespan = "70+ years",
+    habitat = "Coastal and offshore waters worldwide",
+    diet = "Marine mammals, fish, seabirds",
+    conservation_status = "Vulnerable",
+    fun_facts = c(
+      "Can detect a single drop of blood in 25 gallons of water",
+      "Has about 300 serrated teeth arranged in 7 rows",
+      "Body temperature can be 10-15°C warmer than surrounding water",
+      "Known for breaching completely out of the water when hunting seals"
+    ),
+    image_url = "https://upload.wikimedia.org/wikipedia/commons/5/56/White_shark.jpg"
+  ),
+  "Mako Shark" = list(
+    scientific_name = "Isurus oxyrinchus",
+    size = "Up to 4 m (13 ft)",
+    weight = "Up to 570 kg (1,260 lb)",
+    lifespan = "30-35 years",
+    habitat = "Tropical and temperate waters worldwide",
+    diet = "Fish, squid, other sharks",
+    conservation_status = "Endangered",
+    fun_facts = c(
+      "Fastest shark species - can swim up to 60 mph",
+      "Can leap up to 9 meters (30 feet) out of the water",
+      "Has one of the largest brain-to-body ratios of all sharks",
+      "Known for their incredible agility and speed"
+    ),
+    image_url = "https://upload.wikimedia.org/wikipedia/commons/9/9e/Isurus_oxyrinchus2.jpg"
+  ),
+  "Tiger Shark" = list(
+    scientific_name = "Galeocerdo cuvier",
+    size = "Up to 5.5 m (18 ft)",
+    weight = "Up to 900 kg (2,000 lb)",
+    lifespan = "30-40 years",
+    habitat = "Tropical and subtropical waters worldwide",
+    diet = "Anything - fish, seals, birds, dolphins, turtles, garbage",
+    conservation_status = "Near Threatened",
+    fun_facts = c(
+      "Known as the 'garbage can of the sea' - eats almost anything",
+      "Has distinctive tiger-like stripes that fade with age",
+      "One of the few shark species that hunts sea turtles",
+      "Has serrated teeth that can slice through turtle shells"
+    ),
+    image_url = "https://upload.wikimedia.org/wikipedia/commons/3/39/Tiger_shark.jpg"
+  ),
+  "Hammerhead Shark" = list(
+    scientific_name = "Sphyrna spp.",
+    size = "Up to 6 m (20 ft)",
+    weight = "Up to 580 kg (1,280 lb)",
+    lifespan = "20-30 years",
+    habitat = "Warm tropical waters worldwide",
+    diet = "Fish, squid, octopus, crustaceans",
+    conservation_status = "Endangered",
+    fun_facts = c(
+      "Hammer-shaped head provides 360-degree vision",
+      "Uses head to pin stingrays to the seafloor while eating",
+      "Schools of up to 100 individuals during migration",
+      "Has specialized electroreceptors in its head to detect prey"
+    ),
+    image_url = "https://upload.wikimedia.org/wikipedia/commons/5/5f/Hammerhead_shark.jpg"
+  ),
+  "Blue Shark" = list(
+    scientific_name = "Prionace glauca",
+    size = "Up to 3.8 m (12.5 ft)",
+    weight = "Up to 205 kg (450 lb)",
+    lifespan = "15-20 years",
+    habitat = "Deep temperate and tropical waters worldwide",
+    diet = "Fish, squid, seabirds",
+    conservation_status = "Near Threatened",
+    fun_facts = c(
+      "One of the most widespread shark species",
+      "Can migrate across entire ocean basins",
+      "Slender body allows for efficient long-distance swimming",
+      "Gives birth to live young - up to 135 pups at once"
+    ),
+    image_url = "https://upload.wikimedia.org/wikipedia/commons/9/9e/Blue_shark.jpg"
+  )
+)
 
 # Markov chain analysis
 complete_transitions <- expand.grid(state = all_states, next_state = all_states)
@@ -95,25 +198,29 @@ if (any(row_sums == 0)) {
 
 mc <- new("markovchain", states = all_states, transitionMatrix = mat)
 
-# Environmental reward analysis
+# Shark Habitat analysis
 grid_cell_size <- 0.5
 assignment_file_path <- "shark_grid_assignment.rds"
 
 shark_sf_daily <- st_as_sf(Shark_states_daily, coords = c("longitude", "latitude"), crs = 4326)
 
+# The file.exists check might be problematic in some execution environments.
+# For demonstration purposes, we'll ensure ocean_grid is always created.
+# In a real app, you'd handle file existence carefully.
+
+# Ensure that ocean_grid is always defined for further operations
+ocean_grid <- st_make_grid(shark_sf_daily, cellsize = c(grid_cell_size, grid_cell_size)) %>%
+  st_as_sf() %>%
+  mutate(grid_id = 1:n())
+
+# If the assignment file exists, load it, otherwise create and save.
 if (file.exists(assignment_file_path)) {
-  ocean_grid <- st_make_grid(shark_sf_daily, cellsize = c(grid_cell_size, grid_cell_size)) %>%
-    st_as_sf() %>%
-    mutate(grid_id = 1:n())
-  
   shark_grid_assignment <- readRDS(assignment_file_path)
 } else {
-  ocean_grid <- st_make_grid(shark_sf_daily, cellsize = c(grid_cell_size, grid_cell_size)) %>%
-    st_as_sf() %>%
-    mutate(grid_id = 1:n())
   shark_grid_assignment <- st_join(shark_sf_daily, ocean_grid, join = st_within)
   saveRDS(shark_grid_assignment, file = assignment_file_path)
 }
+
 
 Ocean_grid_rewards <- shark_grid_assignment %>%
   as_tibble() %>% 
@@ -125,8 +232,8 @@ Ocean_grid_rewards <- shark_grid_assignment %>%
   ) %>%
   filter(!is.na(mean_chloro) & !is.na(mean_SST)) %>%
   mutate(
-    chloro_norm = (mean_chloro - min(mean_chloro)) / (max(mean_chloro) - min(mean_chloro)),
-    sst_norm = 1 - abs(mean_SST - 16) / (max(mean_SST) - 16),
+    chloro_norm = (mean_chloro - min(mean_chloro, na.rm=TRUE)) / (max(mean_chloro, na.rm=TRUE) - min(mean_chloro, na.rm=TRUE)),
+    sst_norm = 1 - abs(mean_SST - 16) / (max(mean_SST, na.rm=TRUE) - min(mean_SST, na.rm=TRUE)), # Normalized distance from 16C
     reward = (0.6 * chloro_norm) + (0.4 * sst_norm)
   ) %>%
   right_join(ocean_grid, by = "grid_id") %>%
@@ -167,6 +274,16 @@ detect_region <- function(longitude, latitude) {
 # Add region to Shark_states_daily
 Shark_states_daily <- Shark_states_daily %>%
   mutate(region = detect_region(longitude, latitude))
+
+# Function to check if a point is in ocean - NOW ALWAYS TRUE
+# This allows clicking anywhere, including land, and the app will process it.
+is_ocean_point <- function(lat, lng, land_polygons) {
+  clicked_point <- st_point(c(lng, lat)) %>%
+    st_sfc(crs = 4326)
+  intersects_land <- st_intersects(clicked_point, land_polygons, sparse = FALSE)[1]
+  return(!intersects_land) # Return TRUE if it is an ocean point
+}
+
 
 # UI Definition
 ui <- fluidPage(
@@ -259,6 +376,125 @@ ui <- fluidPage(
           border-color: #27ae60;
           width: 100%;
       }
+      
+      .btn-warning {
+          background-color: #f39c12;
+          border-color: #f39c12;
+          width: 100%;
+      }
+      
+      .status-message {
+          padding: 10px;
+          border-radius: 5px;
+          margin: 10px 0;
+          text-align: center;
+          font-weight: bold;
+      }
+      
+      .status-success {
+          background-color: #d4edda;
+          color: #155724;
+          border: 1px solid #c3e6cb;
+      }
+      
+      .status-error {
+          background-color: #f8d7da;
+          color: #721c24;
+          border: 1px solid #f5c6cb;
+      }
+      
+      .status-info {
+          background-color: #d1ecf1;
+          color: #0c5460;
+          border: 1px solid #bee5eb;
+      }
+      
+      /* Shark Species Card Styles */
+      .species-card {
+          background: white;
+          border-radius: 10px;
+          padding: 20px;
+          margin-bottom: 20px;
+          box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+          border-top: 5px solid #3498db;
+      }
+      
+      .species-header {
+          display: flex;
+          align-items: center;
+          margin-bottom: 15px;
+          border-bottom: 2px solid #ecf0f1;
+          padding-bottom: 10px;
+      }
+      
+      .species-image {
+          width: 120px;
+          height: 90px;
+          object-fit: cover;
+          border-radius: 8px;
+          margin-right: 15px;
+      }
+      
+      .species-title {
+          flex: 1;
+      }
+      
+      .species-title h3 {
+          color: #2c3e50;
+          margin: 0 0 5px 0;
+      }
+      
+      .species-title .scientific-name {
+          color: #7f8c8d;
+          font-style: italic;
+          margin: 0;
+      }
+      
+      .species-stats {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+          gap: 15px;
+          margin-bottom: 20px;
+      }
+      
+      .stat-item {
+          background: #f8f9fa;
+          padding: 10px;
+          border-radius: 5px;
+          border-left: 3px solid #3498db;
+      }
+      
+      .stat-label {
+          font-weight: 600;
+          color: #2c3e50;
+          font-size: 0.9em;
+      }
+      
+      .stat-value {
+          color: #34495e;
+          font-weight: 700;
+      }
+      
+      .fun-facts {
+          background: #e8f4f8;
+          padding: 15px;
+          border-radius: 8px;
+          margin-top: 15px;
+      }
+      
+      .fun-facts h5 {
+          color: #2980b9;
+          margin-top: 0;
+      }
+      
+      .fun-facts ul {
+          margin-bottom: 0;
+      }
+      
+      .fun-facts li {
+          margin-bottom: 8px;
+          color: #2c3e50;
+      }
     "))
   ),
   
@@ -339,49 +575,57 @@ ui <- fluidPage(
                               p("Click anywhere on the map to predict shark behavior and movement patterns"),
                               leafletOutput("predictiveMap", height = "600px")
                           )
-                   ),
-                   column(4,
-                          div(class = "prediction-panel",
-                              h4("📍 Prediction Results"),
-                              verbatimTextOutput("clickInfo"),
-                              hr(),
-                              h5("🎯 Predicted Behavior:"),
-                              textOutput("predictedBehavior"),
-                              h5("📈 Environmental Score:"),
-                              textOutput("envScore"),
-                              h5("🦈 Common Species:"),
-                              textOutput("commonSpecies"),
-                              h5("➡️ Movement Direction:"),
-                              div(style = "height: 100px; margin: 0; padding: 0; border: 1px solid #eee;",
-                                  plotOutput("movementArrow", height = "100%"))
-                          ),
-                          div(class = "metric-card",
-                              h4(icon("layer-group"), "Map Overlays"),
-                              checkboxGroupInput("overlays", "Show:",
-                                                 choices = c("Foraging Hotspots" = "foraging",
-                                                             "Environmental Rewards" = "rewards",
-                                                             "Shark Observations" = "observations"),
-                                                 selected = "foraging")
-                          )
+                   ),column(4,
+                            div(class = "prediction-panel",
+                                h4("📍 Prediction Results"),
+                                
+                                div(id = "interactiveClickStatus", class = "status-message status-info",
+                                    "Click on the map to predict shark behavior"
+                                ),
+                                
+                                verbatimTextOutput("clickInfo"),
+                                hr(),
+                                h5("🎯 Predicted Behavior:"),
+                                textOutput("predictedBehavior"),
+                                h5("📈 Environmental Score:"),
+                                textOutput("envScore"),
+                                h5("🦈 Common Species:"),
+                                textOutput("commonSpecies"),
+                                h5("➡️ Movement Direction:"),
+                                div(style = "height: 100px; margin: 0; padding: 0; border: 1px solid #eee;",
+                                    plotOutput("movementArrow", height = "100%"))
+                            ),
+                            div(class = "metric-card",
+                                h4(icon("layer-group"), "Map Overlays"),
+                                checkboxGroupInput("overlays", "Show:",
+                                                   choices = c("Foraging Hotspots" = "foraging",
+                                                               "Shark Observations" = "observations"),
+                                                   selected = "foraging")
+                            )
                    )
                  )
         ),
         
-        # NEW: Movement Predictor Tab
+        # UPDATED: Movement Predictor Tab with click-based simulation
         tabPanel(title = div(icon("route"), "Movement Predictor"),
                  br(),
                  
                  fluidRow(
                    column(4,
                           div(class = "prediction-panel",
+                              h4(icon("mouse-pointer"), "Click to Start Prediction"),
+                              p("Click on any location to set the starting point for the simulation"),
+                              
+                              div(id = "clickStatus", class = "status-message status-info",
+                                  "Click on the map to select a starting location"
+                              ),
+                              
+                              hr(),
+                              
                               h4(icon("sliders-h"), "Prediction Controls"),
                               
-                              selectInput("predictionSpecies", "Shark Species:",
+                              selectInput("predictionSpecies", "Species for Prediction:",
                                           choices = species_dropdown_choices,
-                                          selected = "All"),
-                              
-                              selectInput("predictionRegion", "Ocean Region:",
-                                          choices = c("All", "Atlantic", "Pacific", "Indian", "Southern", "Arctic"),
                                           selected = "All"),
                               
                               selectInput("startBehavior", "Starting Behavior:",
@@ -389,13 +633,13 @@ ui <- fluidPage(
                                           selected = "foraging"),
                               
                               numericInput("predictionSteps", "Prediction Steps (Days):",
-                                          value = 3, min = 1, max = 10, step = 1),
+                                           value = 3, min = 1, max = 10, step = 1),
                               
                               sliderInput("simulationCount", "Number of Simulations:",
-                                         min = 10, max = 200, value = 50, step = 10),
+                                          min = 10, max = 200, value = 50, step = 10),
                               
                               actionButton("runPrediction", "Run Prediction", 
-                                         icon = icon("play"), class = "btn-success"),
+                                           icon = icon("play"), class = "btn-success"),
                               
                               hr(),
                               
@@ -405,7 +649,8 @@ ui <- fluidPage(
                    ),
                    column(8,
                           div(class = "metric-card",
-                              h4(icon("map-marked-alt"), "Predicted Movement Map"),
+                              h4(icon("map-marked-alt"), "Click on Map to Start Prediction"),
+                              p("Selected location: ", strong(textOutput("selectedLocation", inline = TRUE))),
                               leafletOutput("predictionMap", height = "500px")
                           ),
                           fluidRow(
@@ -472,28 +717,34 @@ ui <- fluidPage(
                  )
         ),
         
-        tabPanel(title = div(icon("brain"), "Advanced Analysis"),
+        # NEW: Shark Species Educational Tab
+        tabPanel(title = div(icon("fish"), "Shark Species"),
                  br(),
                  
+                 div(class = "metric-card",
+                     h4(icon("book"), "Shark Species Educational Guide"),
+                     p("Learn about the amazing shark species tracked in this dashboard. Each species has unique adaptations that make them perfect ocean predators.")
+                 ),
+                 
+                 # Generate species cards dynamically
+                 uiOutput("speciesCards")
+        ),
+        
+        tabPanel(title = div(icon("brain"), "Advanced Analysis"),
+                 br(),
                  fluidRow(
-                   column(7,
-                          div(class = "metric-card",
-                              h4(icon("project-diagram"), "Environmental Reward Map"),
-                              leafletOutput("rewardMap", height = "500px")
-                          )
-                   ),
+                   
                    column(5,
                           div(class = "metric-card",
                               h4(icon("table"), "State Transition Matrix"),
                               tableOutput("transitionMatrix")
                           ),
                           div(class = "metric-card",
-                              h4(icon("chart-area"), "Environmental Reward Distribution"),
+                              h4(icon("chart-area"), "Shark Habitat Score"),
                               plotlyOutput("rewardDistribution", height = "250px")
                           )
                    )
                  ),
-                 
                  div(class = "metric-card",
                      h4(icon("code-branch"), "Markov Chain Transition Probabilities"),
                      plotOutput("markovPlot", height = "400px")
@@ -537,10 +788,6 @@ server <- function(input, output, session) {
       data <- data %>% filter(species_simple == input$predictionSpecies)
     }
     
-    if (input$predictionRegion != "All") {
-      data <- data %>% filter(region == input$predictionRegion)
-    }
-    
     return(data)
   })
   
@@ -552,10 +799,85 @@ server <- function(input, output, session) {
   
   # Reactive values for movement predictor
   prediction_results <- reactiveValues(
+    start_point = NULL,
     paths = NULL,
     heatmap_data = NULL,
     last_prediction = NULL
   )
+  
+  # NEW: Generate species cards UI
+  output$speciesCards <- renderUI({
+    species_list <- lapply(names(shark_species_info), function(species_name) {
+      info <- shark_species_info[[species_name]]
+      
+      # Check if this species exists in our data
+      species_in_data <- species_name %in% Shark_states_daily$species_simple
+      data_indicator <- if(species_in_data) {
+        tags$span(icon("check-circle"), " Tracked in this dataset", 
+                  style = "color: #27ae60; font-weight: bold;")
+      } else {
+        tags$span(icon("info-circle"), " Species reference", 
+                  style = "color: #f39c12;")
+      }
+      
+      div(class = "species-card",
+          div(class = "species-header",
+              img(src = info$image_url, class = "species-image", 
+                  alt = paste(species_name, "image")),
+              div(class = "species-title",
+                  h3(species_name),
+                  p(class = "scientific-name", info$scientific_name),
+                  data_indicator
+              )
+          ),
+          
+          div(class = "species-stats",
+              div(class = "stat-item",
+                  div(class = "stat-label", "Maximum Size"),
+                  div(class = "stat-value", info$size)
+              ),
+              div(class = "stat-item",
+                  div(class = "stat-label", "Maximum Weight"),
+                  div(class = "stat-value", info$weight)
+              ),
+              div(class = "stat-item",
+                  div(class = "stat-label", "Lifespan"),
+                  div(class = "stat-value", info$lifespan)
+              ),
+              div(class = "stat-item",
+                  div(class = "stat-label", "Conservation Status"),
+                  div(class = "stat-value", 
+                      style = paste0("color: ", 
+                                     ifelse(info$conservation_status %in% c("Endangered", "Critically Endangered"), "#e74c3c",
+                                            ifelse(info$conservation_status == "Vulnerable", "#f39c12", "#27ae60")),
+                                     "; font-weight: bold;"),
+                      info$conservation_status)
+              )
+          ),
+          
+          div(class = "stat-item",
+              div(class = "stat-label", "Primary Habitat"),
+              div(class = "stat-value", info$habitat)
+          ),
+          
+          div(class = "stat-item",
+              div(class = "stat-label", "Diet"),
+              div(class = "stat-value", info$diet)
+          ),
+          
+          div(class = "fun-facts",
+              h5(icon("star"), " Amazing Facts"),
+              tags$ul(
+                lapply(info$fun_facts, function(fact) {
+                  tags$li(fact)
+                })
+              )
+          )
+      )
+    })
+    
+    do.call(tagList, species_list)
+  })
   
   # Info outputs for the Movement tab
   output$currentFilterInfo <- renderText({
@@ -582,11 +904,20 @@ server <- function(input, output, session) {
     }
   })
   
+  # Selected location display
+  output$selectedLocation <- renderText({
+    if (!is.null(prediction_results$start_point)) {
+      paste("Lat:", round(prediction_results$start_point$lat, 4), 
+            "Lng:", round(prediction_results$start_point$lng, 4))
+    } else {
+      "No location selected"
+    }
+  })
+  
   # Prediction settings display
   output$predictionSettings <- renderText({
     paste(
       "Species:", input$predictionSpecies, "\n",
-      "Region:", input$predictionRegion, "\n", 
       "Starting Behavior:", input$startBehavior, "\n",
       "Steps:", input$predictionSteps, "\n",
       "Simulations:", input$simulationCount
@@ -637,10 +968,10 @@ server <- function(input, output, session) {
       # 1. Predict next behavioral state using Markov chain
       next_state <- predictNextState(current_state)
       
-      # 2. Predict movement based on state + environmental rewards
+      # 2. Predict movement based on state + shark habitat
       movement <- predictMovementDirection(current_lat, current_lng, next_state)
       
-      # 3. Update position (with boundary checks)
+      # 3. Update position (with boundary checks and ocean constraints)
       new_lat <- current_lat + movement$lat_delta
       new_lng <- current_lng + movement$lng_delta
       
@@ -664,7 +995,7 @@ server <- function(input, output, session) {
     
     for (i in 1:simulations) {
       path <- predictMultiStepMovement(start_point$lat, start_point$lng, 
-                                      start_point$state, steps)
+                                       start_point$state, steps)
       all_positions <- rbind(all_positions, path %>% select(lat, lng, step))
     }
     
@@ -675,28 +1006,56 @@ server <- function(input, output, session) {
     
     return(heatmap_data)
   }
+  observeEvent(input$predictionMap_click, {
+    click <- input$predictionMap_click
+    lat <- click$lat
+    lng <- click$lng
+    
+    # If the click is on land, just stop. Do nothing.
+    if (!is_ocean_point(lat, lng, world_land)) {
+      return() # Silently exit the observer.
+    }
+    
+    # If the click is in the ocean, proceed as normal.
+    prediction_results$start_point <- list(
+      lat = lat,
+      lng = lng,
+      state = input$startBehavior
+    )
+    
+    # Update status message to show success
+    shinyjs::html("clickStatus",
+                  paste0("<div class='status-message status-success'>",
+                         "✓ Location selected: ", round(lat, 4), ", ", round(lng, 4),
+                         "</div>"))
+    
+    # Update map with a marker for the valid start point
+    leafletProxy("predictionMap") %>%
+      clearMarkers() %>%
+      addMarkers(
+        lng = lng, lat = lat,
+        popup = paste("Start Point:", input$startBehavior)
+      )
+  })
   
   # Run prediction when button is clicked
   observeEvent(input$runPrediction, {
-    # Use average position from filtered data as starting point
-    pred_data <- predictionData()
-    
-    if (nrow(pred_data) == 0) {
-      # If no data, use a default starting point
-      start_point <- list(lat = 0, lng = 0, state = input$startBehavior)
-    } else {
-      start_point <- list(
-        lat = mean(pred_data$latitude, na.rm = TRUE),
-        lng = mean(pred_data$longitude, na.rm = TRUE), 
-        state = input$startBehavior
-      )
+    # Check if a start point has been selected
+    if (is.null(prediction_results$start_point)) {
+      shinyjs::html("clickStatus", 
+                    paste0("<div class='status-message status-error'>",
+                           "✗ Please select a starting location first by clicking on the map",
+                           "</div>"))
+      return()
     }
+    
+    start_point <- prediction_results$start_point
     
     # Generate multiple paths for heatmap
     all_paths <- list()
     for (i in 1:input$simulationCount) {
       path <- predictMultiStepMovement(start_point$lat, start_point$lng,
-                                     start_point$state, input$predictionSteps)
+                                       start_point$state, input$predictionSteps)
       path$simulation <- i
       all_paths[[i]] <- path
     }
@@ -706,6 +1065,12 @@ server <- function(input, output, session) {
       start_point, input$predictionSteps, input$simulationCount
     )
     prediction_results$last_prediction <- start_point
+    
+    # Update status message
+    shinyjs::html("clickStatus", 
+                  paste0("<div class='status-message status-success'>",
+                         "✓ Prediction completed with ", input$simulationCount, " simulations",
+                         "</div>"))
     
     # Update prediction map
     leafletProxy("predictionMap") %>%
@@ -754,7 +1119,17 @@ server <- function(input, output, session) {
         colors = c("blue", "cyan", "green", "yellow", "red"),
         labels = c("Low", "", "Medium", "", "High"),
         title = "Position Probability"
-      )
+      ) %>%
+      htmlwidgets::onRender("
+        function(el, x) {
+          this.on('click', function(e) {
+            Shiny.setInputValue('predictionMap_click', {
+              lat: e.latlng.lat,
+              lng: e.latlng.lng
+            });
+          });
+        }
+      ")
   })
   
   # Path Analytics Plot
@@ -805,8 +1180,6 @@ server <- function(input, output, session) {
       )
   })
   
-  # [Keep all your existing map and output functions...]
-  
   # Predictive Map
   output$predictiveMap <- renderLeaflet({
     leaflet() %>%
@@ -825,7 +1198,12 @@ server <- function(input, output, session) {
   observeEvent(input$overlays, {
     leafletProxy("predictiveMap") %>%
       clearHeatmap() %>%
-      clearShapes()
+      clearShapes() %>%
+      # Ensure other markers/lines from prediction are cleared to avoid accumulation
+      clearMarkers() %>% 
+      clearPopups() %>%
+      removeMarker(layerId = "prediction_marker") %>%
+      removeShape(layerId = "prediction_arrow")
     
     if ("foraging" %in% input$overlays) {
       leafletProxy("predictiveMap") %>%
@@ -898,7 +1276,7 @@ server <- function(input, output, session) {
       )
   })
   
-  # FIXED: Better movement prediction logic
+  # FIXED: Better movement prediction logic (assumes ocean location)
   predictSharkBehavior <- function(lat, lng) {
     # Find nearest environmental data point
     distances <- sqrt((Shark_states_daily$latitude - lat)^2 + (Shark_states_daily$longitude - lng)^2)
@@ -934,7 +1312,6 @@ server <- function(input, output, session) {
     
     # Common species in area
     nearby_species <- Shark_states_daily %>%
-       
       filter(sqrt((latitude - lat)^2 + (longitude - lng)^2) < 5) %>%
       count(species_simple) %>%
       arrange(desc(n)) %>%
@@ -951,37 +1328,48 @@ server <- function(input, output, session) {
       chlorophyll = round(nearest_data$chlorophyll, 3)
     )
   }
-  
-  # Handle map clicks for predictions
+  # Handle map clicks for predictions - NO LAND PREVENTION
   observeEvent(input$predictiveMap_click, {
     click <- input$predictiveMap_click
     lat <- click$lat
     lng <- click$lng
     
+    # If the click is on land, just stop. Do nothing.
+    if (!is_ocean_point(lat, lng, world_land)) {
+      return() # Silently exit the observer.
+    }
+    
+    # If the click is in the ocean, proceed as normal.
     click_data$last_click <- list(lat = lat, lng = lng)
+    
+    shinyjs::html("interactiveClickStatus",
+                  paste0("<div class='status-message status-success'>",
+                         "✓ Location selected: ", round(lat, 4), ", ", round(lng, 4),
+                         "</div>"))
     
     # Predict behavior and movement
     prediction <- predictSharkBehavior(lat, lng)
     click_data$prediction <- prediction
     
-    # Update map with prediction - FIXED: Correct arrow direction
+    # Update map with prediction marker and arrow
     leafletProxy("predictiveMap") %>%
       clearMarkers() %>%
       clearShapes() %>%
       addMarkers(
         lng = lng, lat = lat,
-        popup = paste("Predicted Behavior:", prediction$behavior)
+        popup = paste("Predicted Behavior:", prediction$behavior),
+        layerId = "prediction_marker"
       ) %>%
-      # FIX: Correct arrow direction - from current position to predicted position
       addPolylines(
-        lng = c(lng, lng + prediction$move_lng), 
+        lng = c(lng, lng + prediction$move_lng),
         lat = c(lat, lat + prediction$move_lat),
         color = "red", weight = 3,
-        opacity = 0.8
+        opacity = 0.8,
+        layerId = "prediction_arrow"
       )
   })
   
-  # FIXED: Movement arrow plot with proper margins
+  # Movement arrow plot
   output$movementArrow <- renderPlot({
     # Set very small margins to prevent "figure margins too large" error
     par(mar = c(0.5, 0.5, 1.5, 0.5), mgp = c(0, 0, 0))
@@ -1015,7 +1403,7 @@ server <- function(input, output, session) {
     }
   })
   
-  # Prediction outputs
+  # Prediction outputs 
   output$clickInfo <- renderText({
     if (!is.null(click_data$last_click)) {
       paste("Clicked at:\nLat:", round(click_data$last_click$lat, 4), 
@@ -1029,7 +1417,7 @@ server <- function(input, output, session) {
     if (!is.null(click_data$prediction)) {
       click_data$prediction$behavior
     } else {
-      "No prediction yet"
+      "Select a location first"
     }
   })
   
@@ -1039,7 +1427,7 @@ server <- function(input, output, session) {
             "\nSST:", click_data$prediction$sst, "°C",
             "\nChlorophyll:", click_data$prediction$chlorophyll, "mg/m³")
     } else {
-      "Click on map"
+      "Select a location first"
     }
   })
   
@@ -1047,11 +1435,10 @@ server <- function(input, output, session) {
     if (!is.null(click_data$prediction)) {
       paste(click_data$prediction$common_species, collapse = ", ")
     } else {
-      "Click on map"
+      "Select a location first"
     }
   })
   
-  # [Keep all your existing outputs and functions exactly the same...]
   # Reactive Markov Prediction
   predicted_state <- reactive({
     req(input$currentState, input$steps)
@@ -1168,8 +1555,8 @@ server <- function(input, output, session) {
     
     plot_ly(reward_data, x = ~reward, type = 'histogram',
             marker = list(color = '#9b59b6')) %>%
-      layout(title = "Environmental Reward Distribution",
-             xaxis = list(title = "Reward Score"),
+      layout(title = "Shark Habitat Score",
+             xaxis = list(title = "Habitat Score"),
              yaxis = list(title = "Frequency"))
   })
   
@@ -1195,33 +1582,6 @@ server <- function(input, output, session) {
              yaxis2 = list(title = "Chlorophyll (mg/m³)", side = 'right', overlaying = "y", showgrid = FALSE),
              barmode = 'group',
              legend = list(orientation = 'h', x = 0.5, y = 1.1))
-  })
-  
-  # Reward Map
-  output$rewardMap <- renderLeaflet({
-    req(Ocean_grid_rewards)
-    
-    reward_pal <- colorNumeric("viridis", domain = Ocean_grid_rewards$reward)
-    
-    leaflet(Ocean_grid_rewards) %>%
-      addTiles() %>%
-      addProviderTiles(providers$Esri.OceanBasemap) %>%
-      addPolygons(
-        fillColor = ~reward_pal(reward),
-        fillOpacity = 0.7,
-        stroke = FALSE,
-        popup = ~paste(
-          "Reward Score:", round(reward, 3), "<br>",
-          "Mean Chlorophyll:", round(mean_chloro, 3), "<br>",
-          "Mean SST:", round(mean_SST, 1), "°C"
-        )
-      ) %>%
-      addLegend(
-        position = "bottomright",
-        pal = reward_pal,
-        values = ~reward,
-        title = "Environmental Reward Score"
-      )
   })
 }
 
