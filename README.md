@@ -26,6 +26,17 @@ flowchart TD
     B --> C[🛠️ Advanced Data Imputation<br/>Machine Learning Gap-Filling]
     C --> D[🔬 Behavioral Analysis<br/>Markov Chain Models]
     D --> E[📈 Predictive Modeling<br/>Foraging Habitat Prediction]
+```
+
+### 🛰️ NASA Data Sources Used
+
+- **PACE Mission**: Phytoplankton and chlorophyll data
+- **SWOT Mission**: Ocean topography and currents  
+- **MODIS Aqua**: Sea surface temperature & chlorophyll
+- **Copernicus Marine**: Ocean current models
+- **GEBCO**: Bathymetric data
+
+---
 
 ## 🎯 Key Features
 
@@ -88,3 +99,66 @@ flowchart TD
 - Markov models for behavioral analysis
 - NASA Earthdata APIs for satellite data
 - Geographic information systems (GIS)
+```
+
+### Satellite Data Processing
+- **Spatial-temporal matching** of shark locations to satellite observations
+- **Multi-resolution data fusion** from different sensors
+- **Quality flags and validation** for biological realism
+- **Gap-filling algorithms** for continuous coverage
+
+---
+
+## 🌟 Scientific Impact
+
+### Conservation Applications
+- **Identify critical foraging habitats** for protection
+- **Understand climate change impacts** on shark distributions
+- **Inform marine protected area design**
+- **Support sustainable fisheries management**
+
+### Educational Value
+- **Demonstrate NASA data applications** for marine biology
+- **Showcase interdisciplinary research** methods
+- **Provide accessible examples** of satellite oceanography
+
+---
+
+## 👥 Team Baby Sharks
+
+We're a passionate team tackling the "Sharks from Space" challenge at NASA Space Apps 2025.
+
+### Our Approach
+- **Data-driven solutions** using NASA's Earth observation assets
+- **Interdisciplinary methods** combining oceanography, ecology, and data science
+- **Practical applications** for shark conservation and management
+- **Educational outreach** to share our findings
+
+---
+
+## 🔮 Future Directions
+
+- **Real-time prediction system** for dynamic habitat mapping
+- **Multi-species comparative analysis**
+- **Climate change vulnerability assessment**
+- **Citizen science data integration**
+
+---
+
+## 📬 Get Involved
+
+We welcome collaboration and feedback! Feel free to:
+- ⭐ Star this repository if you find it useful
+- 🐛 Open issues for bugs or suggestions
+- 🔄 Submit pull requests with improvements
+- 📧 Contact us with collaboration ideas
+
+---
+
+## 📄 License
+
+This project is developed for the NASA Space Apps Challenge 2025 and follows the challenge's guidelines for open collaboration.
+
+---
+
+*Built with ❤️ for shark conservation and NASA's mission to understand our home planet.*
