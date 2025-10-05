@@ -1,0 +1,97 @@
+---
+title: "NASASPACEAPP"
+format: html
+editor: visual
+---
+
+```{r setup, echo=FALSE}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(geosphere)
+library(markovchain)
+library(reshape2)
+```
+
+```{r data}
+Full_Shark_Data <- read.csv("~/Documents/GitHub/NASASpaceApps2025/shark_data_fully_imputed_complete.csv")
+
+
+```
+
+```{r analysis}
+
+max_gap_h <- 24  
+all_states <- c("resting", "foraging", "migrating")
+
+Shark_states <- Full_Shark_Data %>%
+  filter(latitude >= -90 & latitude <= 90 & longitude >= -180 & longitude <= 180) %>%
+  arrange(id, datetime) %>%
+  group_by(id) %>%
+  mutate(
+    next_lat = lead(latitude),
+    next_lon = lead(longitude),
+    next_time = lead(datetime),
+    time_diff_h = as.numeric(difftime(next_time, datetime, units = "hours")),
+    dist_m = distHaversine(cbind(longitude, latitude), cbind(next_lon, next_lat)),
+    speed_mph = dist_m / time_diff_h,
+    state = case_when(
+      time_diff_h > 0 & time_diff_h <= max_gap_h & speed_mph < 50 ~ "resting",
+      time_diff_h > 0 & time_diff_h <= max_gap_h & speed_mph < 500 ~ "foraging",
+      time_diff_h > 0 & time_diff_h <= max_gap_h ~ "migrating",
+      TRUE ~ NA_character_
+    ),
+    next_state = lead(state)
+  ) %>%
+  filter(!is.na(state) & !is.na(next_state)) %>%
+  ungroup()
+complete_transitions <- expand.grid(state = all_states, next_state = all_states)
+
+transition_counts <- Shark_states %>%
+  count(state, next_state) %>%
+  right_join(complete_transitions, by = c("state", "next_state")) %>%
+  mutate(n = ifelse(is.na(n), 0, n))
+
+transition_prob <- transition_counts %>%
+  group_by(state) %>%
+  mutate(prob = n / sum(n)) %>%
+  mutate(prob = ifelse(is.nan(prob), 0, prob)) %>%
+  ungroup() %>%
+  select(state, next_state, prob) %>%
+  pivot_wider(names_from = next_state, values_from = prob)
+
+mat <- as.matrix(transition_prob[, -1])
+rownames(mat) <- transition_prob$state
+
+row_sums <- rowSums(mat)
+if (any(row_sums == 0)) {
+  for (i in which(row_sums == 0)) {
+    mat[i, i] <- 1
+  }
+}
+
+mc <- new("markovchain", states = all_states, transitionMatrix = mat)
+print("Transition Matrix:")
+print(mc)
+
+print("Example Simulation (10 steps from 'resting'):")
+print(rmarkovchain(n = 10, object = mc, t0 = "resting"))
+
+ggplot(Shark_states, aes(x = factor(state, levels = all_states))) +
+  geom_bar(fill = "steelblue") +
+  theme_minimal() +
+  labs(title = "Frequency of Observed Shark States", x = "State", y = "Count")
+
+
+mat_melt <- melt(mat)
+ggplot(mat_melt, aes(Var1, Var2, fill = value)) +
+  geom_tile(color = "black") +
+  geom_text(aes(label = round(value, 2)), size = 5) +
+  scale_fill_gradient(low = "white", high = "dodgerblue", name = "Probability") +
+  labs(title = "Shark State Transition Probabilities", x = "Current State", y = "Next State") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  
+```
