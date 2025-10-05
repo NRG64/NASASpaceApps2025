@@ -109,21 +109,6 @@ flowchart TD
 
 ---
 
-## 🌟 Scientific Impact
-
-### Conservation Applications
-- **Identify critical foraging habitats** for protection
-- **Understand climate change impacts** on shark distributions
-- **Inform marine protected area design**
-- **Support sustainable fisheries management**
-
-### Educational Value
-- **Demonstrate NASA data applications** for marine biology
-- **Showcase interdisciplinary research** methods
-- **Provide accessible examples** of satellite oceanography
-
----
-
 ## 👥 Team Baby Sharks
 
 We're a passionate team tackling the "Sharks from Space" challenge at NASA Space Apps 2025.
@@ -145,15 +130,6 @@ We're a passionate team tackling the "Sharks from Space" challenge at NASA Space
 
 ---
 
-## 📬 Get Involved
-
-We welcome collaboration and feedback! Feel free to:
-- ⭐ Star this repository if you find it useful
-- 🐛 Open issues for bugs or suggestions
-- 🔄 Submit pull requests with improvements
-- 📧 Contact us with collaboration ideas
-
----
 
 ## 📄 License
 
