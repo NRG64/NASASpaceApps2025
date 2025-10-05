@@ -1,0 +1,12 @@
+name: Predictor
+title: Predictor
+username: ryan0870
+account: ryan0870
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 15659016
+bundleId: 10993071
+url: https://ryan0870.shinyapps.io/Predictor/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE

@@ -18,6 +18,7 @@ library(padr)
 library(zoo)
 library(leaflet)
 library(leafem)
+library(shiny)
 ```
 
 ```{r data}
@@ -111,27 +112,54 @@ ggplot(mat_melt, aes(Var1, Var2, fill = value)) +
   
 ```
 ```{r second}
+# ===================================================================
+# --- STEP 3: GRID THE OCEAN AND ASSIGN REWARDS (OPTIMIZED) ---
+# ===================================================================
 
 print("--- Step 3: Gridding the ocean and calculating rewards ---")
 
-# Convert your daily shark data to a spatial object (sf)
-# We use the full daily dataset before transitions were calculated
-shark_sf_daily <- st_as_sf(Shark_states_daily, coords = c("longitude", "latitude"), crs = 4326)
+# --- OPTIMIZATION 1: Use a Coarser Grid ---
+# A smaller cell size (like 0.1) creates a massive grid.
+# Starting with a larger size (0.5) is much faster and often sufficient.
+grid_cell_size <- 0.5 # CHANGED from 0.1 to 0.5 for speed
 
-# Create a spatial grid that covers the entire area of shark movements.
-# You can adjust 'cellsize' to make the grid finer or coarser.
-grid_cell_size <- 0.1 # in degrees
-ocean_grid <- st_make_grid(shark_sf_daily, cellsize = c(grid_cell_size, grid_cell_size)) %>%
-  st_as_sf() %>%
-  mutate(grid_id = 1:n()) # Assign a unique ID to each grid cell
+# --- OPTIMIZATION 2: Pre-compute and Save/Load the Slow Step ---
+# We will save the result of the slow st_join() step so we only run it once.
+assignment_file_path <- "shark_grid_assignment.rds"
 
-# Determine which grid cell each daily shark position falls into.
-shark_grid_assignment <- st_join(shark_sf_daily, ocean_grid, join = st_within)
+if (file.exists(assignment_file_path)) {
+  # If the file already exists, load it instantly. This is the fast path.
+  print("Loading pre-computed grid assignment file...")
+  shark_grid_assignment <- readRDS(assignment_file_path)
+  
+  # We also need the grid itself, let's regenerate it quickly
+  shark_sf_daily <- st_as_sf(Shark_states_daily, coords = c("longitude", "latitude"), crs = 4326)
+  ocean_grid <- st_make_grid(shark_sf_daily, cellsize = c(grid_cell_size, grid_cell_size)) %>%
+    st_as_sf() %>%
+    mutate(grid_id = 1:n())
 
-# Calculate the average environmental conditions for each grid cell
-# that a shark has visited.
+} else {
+  # If the file does NOT exist, run the slow computation. This is the one-time slow path.
+  print("Pre-computed file not found. Running the slow spatial join (this may take a few minutes)...")
+  
+  # Convert your daily shark data to a spatial object (sf)
+  shark_sf_daily <- st_as_sf(Shark_states_daily, coords = c("longitude", "latitude"), crs = 4326)
+
+  # Create the spatial grid
+  ocean_grid <- st_make_grid(shark_sf_daily, cellsize = c(grid_cell_size, grid_cell_size)) %>%
+    st_as_sf() %>%
+    mutate(grid_id = 1:n())
+
+  # THIS IS THE SLOW LINE: Determine which grid cell each daily shark position falls into.
+  shark_grid_assignment <- st_join(shark_sf_daily, ocean_grid, join = st_within)
+  
+
+  print("Saving the result to file for fast loading next time...")
+  saveRDS(shark_grid_assignment, file = assignment_file_path)
+}
+
 Ocean_grid_rewards <- shark_grid_assignment %>%
-  as_tibble() %>% # Convert from sf for easier summarizing
+  as_tibble() %>% 
   group_by(grid_id) %>%
   summarise(
     mean_chloro = mean(chlorophyll, na.rm = TRUE),
@@ -203,70 +231,49 @@ predict_next_location <- function(start_lat, start_lon, model_df, grid_sf) {
   
   return(predicted_cell_geom)
 }
-
-
 # ===================================================================
-# --- STEP 6: VISUALIZATION ---
+# --- STEP 6: VISUALIZATION (Corrected for Static Plot) ---
 # ===================================================================
-# Goal: Create a map that integrates all our results: the reward grid,
-#       the historical shark tracks, and a simulated prediction.
+# Goal: Create a static map that visualizes the main components of
+#       our model: the environmental reward grid and the historical
+#       shark tracks colored by their behavioral state.
 # -------------------------------------------------------------------
 
-print("--- Step 6: Generating the final visualization ---")
+print("--- Step 6: Generating the final static visualization map ---")
 
-# --- Simulate a User Click ---
-# You can change these coordinates to test different starting points
-user_start_lon <- -120.5
-user_start_lat <- 34.5
-user_start_point <- st_as_sf(tibble(lon = user_start_lon, lat = user_start_lat), coords = c("lon", "lat"), crs = 4326)
+# --- Create the Plot using ggplot ---
+# This version removes the simulated click and prediction elements.
+final_static_map <- ggplot() +
+  # Layer 1: The reward grid (background)
+  # This shows the environmental incentives for the sharks.
+  geom_sf(data = Ocean_grid_rewards, aes(fill = reward), color = NA, alpha = 0.8) +
+  scale_fill_viridis_c(name = "Cell Reward Score") +
+  
+  # Layer 2: The historical daily shark positions, colored by behavior
+  # This shows the actual observed data on top of the environment.
+  geom_sf(data = shark_sf_daily, aes(color = state), size = 2) +
+  scale_color_manual(
+    name = "Behavior (Rule-Based)",
+    values = c("resting" = "orange", "foraging" = "green", "migrating" = "dodgerblue")
+  ) +
+  
+  # Labels and theme
+  labs(
+    title = "Shark Movement Model Environment",
+    subtitle = "Historical Daily Positions Over Environmental Reward Grid",
+    x = "Longitude",
+    y = "Latitude"
+  ) +
+  theme_minimal()
 
-# --- Make a Prediction using the function from Step 5 ---
-predicted_cell <- predict_next_location(user_start_lon, user_start_lat, transition_model_df, Ocean_grid_rewards)
+# Print the final static map to the output
+print(final_static_map)
 
-# Proceed to plot only if a prediction was successfully made
-if (!is.null(predicted_cell)) {
-  predicted_centroid <- st_centroid(predicted_cell)
-
-  # --- Create the Plot using ggplot ---
-  final_map <- ggplot() +
-    # Layer 1: The reward grid (background)
-    geom_sf(data = Ocean_grid_rewards, aes(fill = reward), color = NA, alpha = 0.7) +
-    scale_fill_viridis_c(name = "Cell Reward Score") +
-    
-    # Layer 2: The historical daily shark positions, colored by behavior
-    geom_sf(data = shark_sf_daily, aes(color = state), size = 2, alpha = 0.8) +
-    scale_color_manual(name = "Behavior (Rule-Based)", values = c("resting" = "orange", "foraging" = "green", "migrating" = "dodgerblue")) +
-    
-    # Layer 3: The user's click and the model's prediction
-    geom_sf(data = user_start_point, color = "red", shape = 4, size = 5, stroke = 1.5) +
-    geom_sf(data = predicted_centroid, color = "white", shape = 3, size = 5, stroke = 1.5) +
-    
-    # Layer 4: An arrow connecting the click to the prediction
-    geom_segment(aes(x = user_start_lon, y = user_start_lat,
-                     xend = st_coordinates(predicted_centroid)[1], yend = st_coordinates(predicted_centroid)[2]),
-                 arrow = arrow(length = unit(0.3, "cm")), color = "black", size = 1.2) +
-    
-    # Labels and theme
-    labs(title = "Predictive Shark Movement Model",
-         subtitle = "Click (Red X) -> Predicted Next Day Location (White +)",
-         x = "Longitude", y = "Latitude") +
-    theme_minimal()
-
-  print(final_map)
-}
-
-print("--- Workflow Complete ---")
+print("--- Static analysis and plotting complete. ---")
 ```
 
 ```{r shiny_app}
-# ===================================================================
-# --- STEP 7: INTERACTIVE SHINY APPLICATION ---
-# ===================================================================
-# Goal: Take all the processed data and models and build an
-#       interactive map where the user can click to get a prediction.
 
-# --- SHINY UI (USER INTERFACE) ---
-# Defines the layout and appearance of the web app.
 ui <- fluidPage(
   titlePanel("Interactive Shark Movement Prediction"),
   
