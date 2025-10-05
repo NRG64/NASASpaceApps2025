@@ -2,7 +2,7 @@
 
 ## 🌊 Tracking Apex Predators from Orbit
 
-**Team NRG64** - Using NASA satellite data to understand shark behavior and protect crucial marine habitats.
+**Team Baby Sharks** - Using NASA satellite data to understand shark behavior and protect crucial marine habitats.
 
 ---
 
