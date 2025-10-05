@@ -12,6 +12,12 @@ library(lubridate)
 library(geosphere)
 library(markovchain)
 library(reshape2)
+library(sf)
+library(momentuHMM)
+library(padr)
+library(zoo)
+library(leaflet)
+library(leafem)
 ```
 
 ```{r data}
@@ -31,7 +37,7 @@ Shark_states_daily <- Full_Shark_Data %>%
   summarise(
     latitude = mean(latitude),
     longitude = mean(longitude),
-    depth = mean(depth, na.rm = TRUE),
+    depth = mean(bathymetry, na.rm = TRUE),
     chlorophyll = mean(chlorophyll, na.rm = TRUE),
     sst = mean(sst, na.rm = TRUE)
   ) %>%
@@ -104,3 +110,266 @@ ggplot(mat_melt, aes(Var1, Var2, fill = value)) +
   
   
 ```
+```{r second}
+
+print("--- Step 3: Gridding the ocean and calculating rewards ---")
+
+# Convert your daily shark data to a spatial object (sf)
+# We use the full daily dataset before transitions were calculated
+shark_sf_daily <- st_as_sf(Shark_states_daily, coords = c("longitude", "latitude"), crs = 4326)
+
+# Create a spatial grid that covers the entire area of shark movements.
+# You can adjust 'cellsize' to make the grid finer or coarser.
+grid_cell_size <- 0.1 # in degrees
+ocean_grid <- st_make_grid(shark_sf_daily, cellsize = c(grid_cell_size, grid_cell_size)) %>%
+  st_as_sf() %>%
+  mutate(grid_id = 1:n()) # Assign a unique ID to each grid cell
+
+# Determine which grid cell each daily shark position falls into.
+shark_grid_assignment <- st_join(shark_sf_daily, ocean_grid, join = st_within)
+
+# Calculate the average environmental conditions for each grid cell
+# that a shark has visited.
+Ocean_grid_rewards <- shark_grid_assignment %>%
+  as_tibble() %>% # Convert from sf for easier summarizing
+  group_by(grid_id) %>%
+  summarise(
+    mean_chloro = mean(chlorophyll, na.rm = TRUE),
+    mean_SST = mean(sst, na.rm = TRUE),
+    mean_depth = mean(depth, na.rm = TRUE)
+  ) %>%
+  filter(!is.na(mean_chloro) & !is.na(mean_SST)) %>%
+  
+ 
+  mutate(
+    chloro_norm = (mean_chloro - min(mean_chloro)) / (max(mean_chloro) - min(mean_chloro)),
+    sst_norm = 1 - abs(mean_SST - 16) / (max(mean_SST) - 16),
+
+    reward = (0.6 * chloro_norm) + (0.4 * sst_norm)
+  ) %>%
+  right_join(ocean_grid, by = "grid_id") %>%
+  st_as_sf() %>%
+  filter(!is.na(reward))
+
+
+print("--- Step 4: Building the reward-based movement model ---")
+
+grid_neighbors <- st_touches(Ocean_grid_rewards, Ocean_grid_rewards)
+
+transition_model <- list()
+for (i in 1:nrow(Ocean_grid_rewards)) {
+  current_cell_id <- Ocean_grid_rewards$grid_id[i]
+  neighbor_indices <- grid_neighbors[[i]]
+  
+  # Proceed only if the cell has neighbors
+  if (length(neighbor_indices) > 0) {
+    neighbor_rewards <- Ocean_grid_rewards$reward[neighbor_indices]
+    neighbor_ids <- Ocean_grid_rewards$grid_id[neighbor_indices]
+    
+    # Probability is proportional to the reward score
+    total_reward <- sum(neighbor_rewards, na.rm = TRUE)
+    if (total_reward > 0) {
+      probs <- neighbor_rewards / total_reward
+      transition_model[[current_cell_id]] <- tibble(
+        from_grid = current_cell_id,
+        to_grid = neighbor_ids,
+        prob = probs
+      )
+    }
+  }
+}
+# Combine the list into a single, efficient data frame
+transition_model_df <- bind_rows(transition_model)
+
+
+print("--- Step 5: Defining the prediction function ---")
+
+predict_next_location <- function(start_lat, start_lon, model_df, grid_sf) {
+
+  start_point <- st_as_sf(tibble(lon = start_lon, lat = start_lat), coords = c("lon", "lat"), crs = 4326)
+  
+  start_cell_index <- st_nearest_feature(start_point, grid_sf)
+  start_cell_id <- grid_sf$grid_id[start_cell_index]
+  
+  possible_moves <- model_df %>% filter(from_grid == start_cell_id)
+  
+  if (nrow(possible_moves) == 0) {
+    print("No valid moves from this location.")
+    return(NULL) 
+  }
+  predicted_cell_id <- sample(possible_moves$to_grid, size = 1, prob = possible_moves$prob)
+  
+  predicted_cell_geom <- grid_sf %>% filter(grid_id == predicted_cell_id)
+  
+  return(predicted_cell_geom)
+}
+
+
+# ===================================================================
+# --- STEP 6: VISUALIZATION ---
+# ===================================================================
+# Goal: Create a map that integrates all our results: the reward grid,
+#       the historical shark tracks, and a simulated prediction.
+# -------------------------------------------------------------------
+
+print("--- Step 6: Generating the final visualization ---")
+
+# --- Simulate a User Click ---
+# You can change these coordinates to test different starting points
+user_start_lon <- -120.5
+user_start_lat <- 34.5
+user_start_point <- st_as_sf(tibble(lon = user_start_lon, lat = user_start_lat), coords = c("lon", "lat"), crs = 4326)
+
+# --- Make a Prediction using the function from Step 5 ---
+predicted_cell <- predict_next_location(user_start_lon, user_start_lat, transition_model_df, Ocean_grid_rewards)
+
+# Proceed to plot only if a prediction was successfully made
+if (!is.null(predicted_cell)) {
+  predicted_centroid <- st_centroid(predicted_cell)
+
+  # --- Create the Plot using ggplot ---
+  final_map <- ggplot() +
+    # Layer 1: The reward grid (background)
+    geom_sf(data = Ocean_grid_rewards, aes(fill = reward), color = NA, alpha = 0.7) +
+    scale_fill_viridis_c(name = "Cell Reward Score") +
+    
+    # Layer 2: The historical daily shark positions, colored by behavior
+    geom_sf(data = shark_sf_daily, aes(color = state), size = 2, alpha = 0.8) +
+    scale_color_manual(name = "Behavior (Rule-Based)", values = c("resting" = "orange", "foraging" = "green", "migrating" = "dodgerblue")) +
+    
+    # Layer 3: The user's click and the model's prediction
+    geom_sf(data = user_start_point, color = "red", shape = 4, size = 5, stroke = 1.5) +
+    geom_sf(data = predicted_centroid, color = "white", shape = 3, size = 5, stroke = 1.5) +
+    
+    # Layer 4: An arrow connecting the click to the prediction
+    geom_segment(aes(x = user_start_lon, y = user_start_lat,
+                     xend = st_coordinates(predicted_centroid)[1], yend = st_coordinates(predicted_centroid)[2]),
+                 arrow = arrow(length = unit(0.3, "cm")), color = "black", size = 1.2) +
+    
+    # Labels and theme
+    labs(title = "Predictive Shark Movement Model",
+         subtitle = "Click (Red X) -> Predicted Next Day Location (White +)",
+         x = "Longitude", y = "Latitude") +
+    theme_minimal()
+
+  print(final_map)
+}
+
+print("--- Workflow Complete ---")
+```
+
+```{r shiny_app}
+# ===================================================================
+# --- STEP 7: INTERACTIVE SHINY APPLICATION ---
+# ===================================================================
+# Goal: Take all the processed data and models and build an
+#       interactive map where the user can click to get a prediction.
+
+# --- SHINY UI (USER INTERFACE) ---
+# Defines the layout and appearance of the web app.
+ui <- fluidPage(
+  titlePanel("Interactive Shark Movement Prediction"),
+  
+  sidebarLayout(
+    sidebarPanel(
+      h4("Instructions"),
+      p("Click anywhere on the map to select a starting location for a shark."),
+      p("The model will predict the most likely grid cell the shark will move to on the next day, based on historical movements and environmental rewards (chlorophyll, SST)."),
+      hr(),
+      h4("Legend"),
+      p(HTML("🟠 <b>Resting:</b> Low-speed movement.")),
+      p(HTML("🟢 <b>Foraging:</b> Medium-speed movement.")),
+      p(HTML("🔵 <b>Migrating:</b> High-speed, long-distance movement.")),
+      p(HTML("❌ <b>Your Click:</b> The starting point for the prediction.")),
+      p(HTML("➕ <b>Prediction:</b> The predicted location for the next day."))
+    ),
+    mainPanel(
+      # The leaflet map will be rendered here and will fill the main panel
+      leafletOutput("map", height = "85vh")
+    )
+  )
+)
+
+server <- function(input, output, session) {
+
+
+  output$map <- renderLeaflet({
+    leaflet() %>%
+      addProviderTiles(providers$Esri.OceanBasemap, group = "Ocean Basemap") %>%
+      addProviderTiles(providers$CartoDB.Positron, group = "Light Basemap") %>%
+      
+
+      addPolygons(
+        data = Ocean_grid_rewards,
+        fillColor = ~colorNumeric("viridis", reward)(reward),
+        fillOpacity = 0.6,
+        stroke = FALSE,
+        group = "Reward Grid",
+        popup = ~paste("Reward Score:", round(reward, 2))
+      ) %>%
+      
+
+      addCircleMarkers(
+        data = shark_sf_daily,
+        color = ~case_when(
+          state == "resting" ~ "orange",
+          state == "foraging" ~ "green",
+          state == "migrating" ~ "dodgerblue",
+          TRUE ~ "grey"
+        ),
+        radius = 4,
+        stroke = TRUE, weight = 1, color = "black",
+        fillOpacity = 0.8,
+        group = "Historical Tracks",
+        popup = ~paste("Date:", date, "<br>Behavior:", state)
+      ) %>%
+      
+
+      addLayersControl(
+        baseGroups = c("Ocean Basemap", "Light Basemap"),
+        overlayGroups = c("Reward Grid", "Historical Tracks"),
+        options = layersControlOptions(collapsed = FALSE)
+      ) %>%
+      addScaleBar()
+  })
+  observeEvent(input$map_click, {
+    click <- input$map_click
+    lat <- click$lat
+    lon <- click$lng
+
+    predicted_cell <- predict_next_location(lat, lon, transition_model_df, Ocean_grid_rewards)
+    
+
+    proxy <- leafletProxy("map")
+    
+    # First, clear any markers and arrows from the previous prediction
+    proxy %>% clearGroup("prediction_group")
+    
+    # Add a marker for the user's click
+    proxy %>% addAwesomeMarkers(
+      lng = lon, lat = lat,
+      icon = awesomeIcons(icon = "times", library = "fa", markerColor = "red"),
+      group = "prediction_group"
+    )
+    
+    if (!is.null(predicted_cell)) {
+      predicted_centroid <- st_centroid(predicted_cell)
+      pred_coords <- st_coordinates(predicted_centroid)
+      
+      proxy %>% addAwesomeMarkers(
+          lng = pred_coords, lat = pred_coords,
+          icon = awesomeIcons(icon = "plus", library = "fa", markerColor = "purple"),
+          group = "prediction_group"
+        ) %>%
+        addArrowhead(
+          lng0 = lon, lat0 = lat,
+          lng1 = pred_coords, lat1 = pred_coords,
+          color = "black", weight = 2, opacity = 1,
+          group = "prediction_group"
+        )
+    }
+  })
+}
+
+
+shinyApp(ui, server)
