@@ -24,31 +24,40 @@ Full_Shark_Data <- read.csv("~/Documents/GitHub/NASASpaceApps2025/shark_data_ful
 
 max_gap_h <- 24  
 all_states <- c("resting", "foraging", "migrating")
-
-Shark_states <- Full_Shark_Data %>%
+Shark_states_daily <- Full_Shark_Data %>%
   filter(latitude >= -90 & latitude <= 90 & longitude >= -180 & longitude <= 180) %>%
-  arrange(id, datetime) %>%
+  mutate(date = as.Date(datetime)) %>%
+  group_by(id, date) %>%
+  summarise(
+    latitude = mean(latitude),
+    longitude = mean(longitude),
+    depth = mean(depth, na.rm = TRUE),
+    chlorophyll = mean(chlorophyll, na.rm = TRUE),
+    sst = mean(sst, na.rm = TRUE)
+  ) %>%
+  arrange(id, date) %>%
   group_by(id) %>%
   mutate(
     next_lat = lead(latitude),
     next_lon = lead(longitude),
-    next_time = lead(datetime),
-    time_diff_h = as.numeric(difftime(next_time, datetime, units = "hours")),
+    next_date = lead(date),
+    time_diff_days = as.numeric(difftime(next_date, date, units = "days")),
     dist_m = distHaversine(cbind(longitude, latitude), cbind(next_lon, next_lat)),
-    speed_mph = dist_m / time_diff_h,
+    speed_mpd = dist_m / time_diff_days,  # meters per day
     state = case_when(
-      time_diff_h > 0 & time_diff_h <= max_gap_h & speed_mph < 50 ~ "resting",
-      time_diff_h > 0 & time_diff_h <= max_gap_h & speed_mph < 500 ~ "foraging",
-      time_diff_h > 0 & time_diff_h <= max_gap_h ~ "migrating",
+      !is.na(speed_mpd) & speed_mpd < 500 ~ "resting",
+      !is.na(speed_mpd) & speed_mpd < 5000 ~ "foraging",
+      !is.na(speed_mpd) ~ "migrating",
       TRUE ~ NA_character_
     ),
     next_state = lead(state)
   ) %>%
   filter(!is.na(state) & !is.na(next_state)) %>%
   ungroup()
+
 complete_transitions <- expand.grid(state = all_states, next_state = all_states)
 
-transition_counts <- Shark_states %>%
+transition_counts <- Shark_states_daily %>%
   count(state, next_state) %>%
   right_join(complete_transitions, by = c("state", "next_state")) %>%
   mutate(n = ifelse(is.na(n), 0, n))
