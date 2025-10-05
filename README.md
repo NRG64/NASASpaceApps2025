@@ -15,20 +15,16 @@ Create a mathematical framework for identifying sharks and predicting their fora
 We developed a comprehensive data pipeline that transforms raw shark tracking data into rich environmental insights using NASA's Earth observation data.
 
 ---
-
 ## 🚀 What We've Built
 
 ### 📊 Data Pipeline Architecture
-Raw Shark Locations (41,080 observations)
-↓
-🌊 Environmental Data Integration
-↓
-🛠️ Advanced Data Imputation
-↓
-🔬 Behavioral Analysis
-↓
-📈 Predictive Modeling
 
+```mermaid
+flowchart TD
+    A[🦈 Raw Shark Locations<br/>41,080 observations] --> B[🌊 Environmental Data Integration<br/>NASA Satellite Data]
+    B --> C[🛠️ Advanced Data Imputation<br/>Machine Learning Gap-Filling]
+    C --> D[🔬 Behavioral Analysis<br/>Markov Chain Models]
+    D --> E[📈 Predictive Modeling<br/>Foraging Habitat Prediction]
 ---
 
 ## 🎯 Key Features
